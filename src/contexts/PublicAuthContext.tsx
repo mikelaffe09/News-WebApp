@@ -1,7 +1,17 @@
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import { Session, User } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabase';
+import type { Session, User } from '@supabase/supabase-js';
 import { UserProfile } from '../types';
+import {
+  getCurrentSession,
+  getPublicUserData,
+  onAuthSessionChange,
+  saveArticleForUser,
+  signInWithPassword,
+  signOut as signOutUser,
+  signUpPublicUser,
+  unsaveArticleForUser,
+  updatePublicUserProfile,
+} from '../features/auth/authService';
 
 interface PublicAuthContextValue {
   session: Session | null;
@@ -26,25 +36,24 @@ export function PublicAuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   async function loadUserData(userId: string) {
-    const [profileRes, savedRes] = await Promise.all([
-      supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle(),
-      supabase.from('saved_articles').select('article_id').eq('user_id', userId),
-    ]);
-    setProfile(profileRes.data ?? null);
-    setSavedIds(new Set((savedRes.data ?? []).map((s: { article_id: string }) => s.article_id)));
+    const data = await getPublicUserData(userId);
+    setProfile(data.profile);
+    setSavedIds(data.savedIds);
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    getCurrentSession().then(session => {
       setSession(session);
       if (session?.user) {
         loadUserData(session.user.id).finally(() => setLoading(false));
       } else {
         setLoading(false);
       }
+    }).catch(() => {
+      setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const subscription = onAuthSessionChange((_event, session) => {
       setSession(session);
       if (session?.user) {
         loadUserData(session.user.id);
@@ -58,54 +67,38 @@ export function PublicAuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function signIn(email: string, password: string) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return { error: error.message };
-    return { error: null };
+    return signInWithPassword(email, password);
   }
 
   async function signUp(email: string, password: string, displayName: string) {
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) return { error: error.message };
-    if (data.user) {
-      await supabase.from('user_profiles').insert({
-        id: data.user.id,
-        email,
-        display_name: displayName.trim() || null,
-      });
-    }
-    return { error: null };
+    return signUpPublicUser(email, password, displayName);
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    await signOutUser();
   }
 
   const saveArticle = useCallback(async (articleId: string) => {
     if (!session?.user) return;
-    const { error } = await supabase.from('saved_articles').insert({
-      user_id: session.user.id,
-      article_id: articleId,
-    });
-    if (!error) setSavedIds(prev => new Set([...prev, articleId]));
+    await saveArticleForUser(session.user.id, articleId);
+    setSavedIds(prev => new Set([...prev, articleId]));
   }, [session]);
 
   const unsaveArticle = useCallback(async (articleId: string) => {
     if (!session?.user) return;
-    const { error } = await supabase.from('saved_articles')
-      .delete()
-      .eq('user_id', session.user.id)
-      .eq('article_id', articleId);
-    if (!error) setSavedIds(prev => { const next = new Set(prev); next.delete(articleId); return next; });
+    await unsaveArticleForUser(session.user.id, articleId);
+    setSavedIds(prev => { const next = new Set(prev); next.delete(articleId); return next; });
   }, [session]);
 
   const updateProfile = useCallback(async (updates: Partial<Pick<UserProfile, 'display_name'>>) => {
     if (!session?.user) return { error: 'Not signed in' };
-    const { error } = await supabase.from('user_profiles')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', session.user.id);
-    if (error) return { error: error.message };
-    setProfile(prev => prev ? { ...prev, ...updates } : prev);
-    return { error: null };
+    try {
+      await updatePublicUserProfile(session.user.id, updates);
+      setProfile(prev => prev ? { ...prev, ...updates } : prev);
+      return { error: null };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Unable to update profile' };
+    }
   }, [session]);
 
   return (

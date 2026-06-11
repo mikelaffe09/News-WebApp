@@ -1,89 +1,50 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Search, X, Filter, TrendingUp, Clock } from 'lucide-react';
 import PublicLayout from '../../components/layout/PublicLayout';
-import ArticleCard from '../../components/ArticleCard';
-import { supabase } from '../../lib/supabase';
-import { Article, Category } from '../../types';
-
-const ARTICLE_SELECT = `*, author:authors(*), category:categories(*)`;
+import ArticleCard from '../../features/articles/ArticleCard';
+import { Article } from '../../types';
+import {
+  getTrendingArticles,
+  getTrendingSearches,
+  recordSearchQuery,
+  searchPublishedArticles,
+} from '../../features/articles/articleService';
+import { ArticleSearchSort } from '../../features/articles/articleTypes';
+import { useCategories } from '../../features/categories/useCategories';
 
 export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [inputValue, setInputValue] = useState(searchParams.get('q') || '');
   const [articles, setArticles] = useState<Article[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
+  const { categories } = useCategories({ orderBy: 'sort_order' });
   const [trendingSearches, setTrendingSearches] = useState<string[]>([]);
   const [trendingArticles, setTrendingArticles] = useState<Article[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('');
-  const [sortBy, setSortBy] = useState<'relevance' | 'newest' | 'oldest' | 'popular'>('relevance');
+  const [sortBy, setSortBy] = useState<ArticleSearchSort>('relevance');
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const query = searchParams.get('q') || '';
 
   useEffect(() => {
-    supabase.from('categories').select('*').order('sort_order').then(({ data }) => {
-      if (data) setCategories(data);
-    });
-    // Load trending searches (top queries from last 7 days)
-    supabase
-      .from('search_queries')
-      .select('query')
-      .gte('created_at', new Date(Date.now() - 7 * 86400000).toISOString())
-      .order('created_at', { ascending: false })
-      .limit(50)
-      .then(({ data }) => {
-        if (!data) return;
-        const counts: Record<string, number> = {};
-        data.forEach(r => { counts[r.query] = (counts[r.query] || 0) + 1; });
-        const sorted = Object.entries(counts)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 8)
-          .map(([q]) => q);
-        setTrendingSearches(sorted);
-      });
-    // Load trending articles (highest view_count, published in last 30 days)
-    supabase.from('articles').select(ARTICLE_SELECT)
-      .eq('status', 'published')
-      .gte('published_at', new Date(Date.now() - 30 * 86400000).toISOString())
-      .order('view_count', { ascending: false })
-      .limit(5)
-      .then(({ data }) => { if (data) setTrendingArticles(data); });
+    getTrendingSearches(7, 8).then(setTrendingSearches).catch(() => setTrendingSearches([]));
+    getTrendingArticles(30, 5).then(setTrendingArticles).catch(() => setTrendingArticles([]));
+  }, []);
+
+  const performSearch = useCallback(async (q: string, catId: string, sort: ArticleSearchSort) => {
+    if (!q.trim()) return;
+    setLoading(true); setSearched(true);
+    const data = await searchPublishedArticles({ query: q, categoryId: catId, sortBy: sort, limit: 24 });
+    setArticles(data);
+    setLoading(false);
+    void recordSearchQuery(q, data.length);
   }, []);
 
   useEffect(() => {
     setInputValue(query);
-    if (query) performSearch(query, selectedCategory, sortBy);
+    if (query) void performSearch(query, selectedCategory, sortBy);
     else setSearched(false);
-  }, [searchParams]);
-
-  async function performSearch(q: string, catId: string, sort: typeof sortBy) {
-    if (!q.trim()) return;
-    setLoading(true); setSearched(true);
-
-    let req = supabase.from('articles').select(ARTICLE_SELECT).eq('status', 'published');
-
-    // Full-text search via tsvector when query is long enough, ilike for short queries
-    if (q.trim().length >= 3) {
-      req = req.textSearch('search_vector', q.trim(), { type: 'websearch', config: 'english' });
-    } else {
-      req = req.or(`title.ilike.%${q}%,subtitle.ilike.%${q}%,excerpt.ilike.%${q}%`);
-    }
-
-    if (catId) req = req.eq('category_id', catId);
-
-    if (sort === 'newest' || sort === 'relevance') req = req.order('published_at', { ascending: false });
-    else if (sort === 'oldest') req = req.order('published_at', { ascending: true });
-    else req = req.order('view_count', { ascending: false });
-
-    req = req.limit(24);
-
-    const { data } = await req;
-    setArticles(data || []);
-    setLoading(false);
-
-    supabase.from('search_queries').insert({ query: q.trim(), results_count: data?.length || 0 });
-  }
+  }, [performSearch, query, selectedCategory, sortBy]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -91,10 +52,6 @@ export default function SearchPage() {
     setSelectedCategory('');
     setSortBy('relevance');
     setSearchParams({ q: inputValue.trim() });
-  }
-
-  function applyFilter(catId: string, sort: typeof sortBy) {
-    if (query) performSearch(query, catId, sort);
   }
 
   return (
@@ -148,7 +105,7 @@ export default function SearchPage() {
             <Filter size={14} className="text-slate-400" />
             <select
               value={selectedCategory}
-              onChange={e => { setSelectedCategory(e.target.value); applyFilter(e.target.value, sortBy); }}
+              onChange={e => { setSelectedCategory(e.target.value); }}
               className="text-sm border border-slate-300 rounded px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-red-600"
             >
               <option value="">All categories</option>
@@ -156,7 +113,7 @@ export default function SearchPage() {
             </select>
             <select
               value={sortBy}
-              onChange={e => { setSortBy(e.target.value as typeof sortBy); applyFilter(selectedCategory, e.target.value as typeof sortBy); }}
+              onChange={e => { setSortBy(e.target.value as ArticleSearchSort); }}
               className="text-sm border border-slate-300 rounded px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-red-600"
             >
               <option value="relevance">Most relevant</option>

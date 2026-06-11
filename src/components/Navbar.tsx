@@ -1,14 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Search, Menu, X, ChevronDown, User, Bookmark, LogOut } from 'lucide-react';
-import { supabase } from '../lib/supabase';
 import { usePublicAuth } from '../contexts/PublicAuthContext';
-import { Category } from '../types';
+import { useCategories } from '../features/categories/useCategories';
 
 const SITE_NAME = 'The Chronicle';
 
 export default function Navbar() {
-  const [categories, setCategories] = useState<Category[]>([]);
+  const { categories } = useCategories({ orderBy: 'sort_order' });
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -18,12 +17,6 @@ export default function Navbar() {
   const userMenuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
-
-  useEffect(() => {
-    supabase.from('categories').select('*').order('sort_order').then(({ data }) => {
-      if (data) setCategories(data);
-    });
-  }, []);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 10);

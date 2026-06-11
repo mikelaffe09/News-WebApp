@@ -1,155 +1,50 @@
 import { useEffect, useState } from 'react';
-import { Eye, TrendingUp, Users, Mail, Search, CreditCard, ArrowUp, ArrowDown } from 'lucide-react';
+import { Eye, TrendingUp, Users, Mail, Search, CreditCard, ArrowUp } from 'lucide-react';
 import CMSLayout from '../../components/layout/CMSLayout';
-import { supabase } from '../../lib/supabase';
 import { Link } from 'react-router-dom';
+import { AnalyticsDashboardData, getAnalyticsDashboardData } from '../../features/analytics/analyticsService';
 
-interface TopArticle {
-  id: string;
-  title: string;
-  slug: string;
-  view_count: number;
-  published_at: string | null;
-}
-
-interface TopCategory {
-  name: string;
-  color: string;
-  article_count: number;
-  total_views: number;
-}
-
-interface TopAuthor {
-  name: string;
-  slug: string;
-  article_count: number;
-  total_views: number;
-}
-
-interface SearchTerm {
-  query: string;
-  count: number;
-  last_searched: string;
-}
-
-interface DailyStat {
-  date: string;
-  views: number;
-}
+const EMPTY_ANALYTICS: AnalyticsDashboardData = {
+  totalViews: 0,
+  totalArticles: 0,
+  subscribers: 0,
+  newsletters: 0,
+  paywallImpressions: 0,
+  subscriptions: 0,
+  topArticles: [],
+  topCategories: [],
+  topAuthors: [],
+  searchTerms: [],
+  dailyStats: [],
+};
 
 export default function AnalyticsDashboardPage() {
   const [loading, setLoading] = useState(true);
-  const [totalViews, setTotalViews] = useState(0);
-  const [totalArticles, setTotalArticles] = useState(0);
-  const [subscribers, setSubscribers] = useState(0);
-  const [newsletters, setNewsletters] = useState(0);
-  const [paywallImpressions, setPaywallImpressions] = useState(0);
-  const [subscriptions, setSubscriptions] = useState(0);
-  const [topArticles, setTopArticles] = useState<TopArticle[]>([]);
-  const [topCategories, setTopCategories] = useState<TopCategory[]>([]);
-  const [topAuthors, setTopAuthors] = useState<TopAuthor[]>([]);
-  const [searchTerms, setSearchTerms] = useState<SearchTerm[]>([]);
-  const [dailyStats, setDailyStats] = useState<DailyStat[]>([]);
+  const [analytics, setAnalytics] = useState<AnalyticsDashboardData>(EMPTY_ANALYTICS);
 
   useEffect(() => {
     async function load() {
-      const [
-        viewsRes, articleCountRes, subRes, nlRes,
-        paywallRes, subscriptionRes,
-        topArticlesRes, topCatsRes, topAuthorsRes, searchRes, dailyRes,
-      ] = await Promise.all([
-        supabase.from('articles').select('view_count').eq('status', 'published'),
-        supabase.from('articles').select('id', { count: 'exact' }).eq('status', 'published'),
-        supabase.from('subscriptions').select('id', { count: 'exact' }).eq('status', 'active'),
-        supabase.from('newsletter_subscriptions').select('id', { count: 'exact' }).eq('status', 'active'),
-        supabase.from('analytics_events').select('id', { count: 'exact' }).eq('event_type', 'paywall_impression'),
-        supabase.from('analytics_events').select('id', { count: 'exact' }).eq('event_type', 'subscription_complete'),
-        supabase.from('articles').select('id,title,slug,view_count,published_at').eq('status', 'published').order('view_count', { ascending: false }).limit(10),
-        supabase.from('articles').select('category:categories(name,color)').eq('status', 'published').not('category_id', 'is', null),
-        supabase.from('articles').select('author:authors(name,slug), view_count').eq('status', 'published').not('author_id', 'is', null),
-        supabase.from('search_queries').select('query,created_at').order('created_at', { ascending: false }).limit(200),
-        supabase.from('analytics_events').select('created_at').eq('event_type', 'article_view').gte('created_at', new Date(Date.now() - 14 * 86400000).toISOString()),
-      ]);
-
-      const views = (viewsRes.data || []).reduce((s, a) => s + (a.view_count || 0), 0);
-      setTotalViews(views);
-      setTotalArticles(articleCountRes.count || 0);
-      setSubscribers(subRes.count || 0);
-      setNewsletters(nlRes.count || 0);
-      setPaywallImpressions(paywallRes.count || 0);
-      setSubscriptions(subscriptionRes.count || 0);
-      setTopArticles(topArticlesRes.data as TopArticle[] || []);
-
-      // Aggregate categories
-      const catMap: Record<string, { name: string; color: string; article_count: number; total_views: number }> = {};
-      for (const a of (topCatsRes.data || [])) {
-        const cat = (a as any).category;
-        if (!cat?.name) continue;
-        if (!catMap[cat.name]) catMap[cat.name] = { name: cat.name, color: cat.color, article_count: 0, total_views: 0 };
-        catMap[cat.name].article_count++;
+      try {
+        setAnalytics(await getAnalyticsDashboardData());
+      } finally {
+        setLoading(false);
       }
-      const catsWithViews = await supabase.from('articles').select('category:categories(name,color), view_count').eq('status', 'published').not('category_id', 'is', null);
-      for (const a of (catsWithViews.data || [])) {
-        const cat = (a as any).category;
-        if (!cat?.name) continue;
-        if (!catMap[cat.name]) catMap[cat.name] = { name: cat.name, color: cat.color, article_count: 0, total_views: 0 };
-        catMap[cat.name].total_views += (a as any).view_count || 0;
-      }
-      setTopCategories(Object.values(catMap).sort((a, b) => b.total_views - a.total_views).slice(0, 8));
-
-      // Aggregate authors
-      const authorMap: Record<string, { name: string; slug: string; article_count: number; total_views: number }> = {};
-      for (const a of (topAuthorsRes.data || [])) {
-        const author = (a as any).author;
-        if (!author?.name) continue;
-        const key = author.slug;
-        if (!authorMap[key]) authorMap[key] = { name: author.name, slug: author.slug, article_count: 0, total_views: 0 };
-        authorMap[key].article_count++;
-        authorMap[key].total_views += (a as any).view_count || 0;
-      }
-      setTopAuthors(Object.values(authorMap).sort((a, b) => b.total_views - a.total_views).slice(0, 8));
-
-      // Search terms
-      const termMap: Record<string, { count: number; last_searched: string }> = {};
-      for (const s of (searchRes.data || [])) {
-        const q = s.query.toLowerCase().trim();
-        if (!q) continue;
-        if (!termMap[q]) termMap[q] = { count: 0, last_searched: s.created_at };
-        termMap[q].count++;
-        if (s.created_at > termMap[q].last_searched) termMap[q].last_searched = s.created_at;
-      }
-      setSearchTerms(Object.entries(termMap).map(([query, v]) => ({ query, ...v })).sort((a, b) => b.count - a.count).slice(0, 10));
-
-      // Daily stats (last 14 days)
-      const dayMap: Record<string, number> = {};
-      for (const e of (dailyRes.data || [])) {
-        const day = e.created_at.slice(0, 10);
-        dayMap[day] = (dayMap[day] || 0) + 1;
-      }
-      const days: DailyStat[] = [];
-      for (let i = 13; i >= 0; i--) {
-        const d = new Date(Date.now() - i * 86400000);
-        const key = d.toISOString().slice(0, 10);
-        days.push({ date: key, views: dayMap[key] || 0 });
-      }
-      setDailyStats(days);
-      setLoading(false);
     }
     load();
   }, []);
 
-  const conversionRate = paywallImpressions > 0
-    ? ((subscriptions / paywallImpressions) * 100).toFixed(1)
+  const conversionRate = analytics.paywallImpressions > 0
+    ? ((analytics.subscriptions / analytics.paywallImpressions) * 100).toFixed(1)
     : '0.0';
 
-  const maxDailyViews = Math.max(...dailyStats.map(d => d.views), 1);
+  const maxDailyViews = Math.max(...analytics.dailyStats.map(d => d.views), 1);
 
   const statCards = [
-    { label: 'Total views', value: totalViews.toLocaleString(), icon: Eye, color: 'text-blue-700', bg: 'bg-blue-50' },
-    { label: 'Published articles', value: totalArticles.toLocaleString(), icon: TrendingUp, color: 'text-green-700', bg: 'bg-green-50' },
-    { label: 'Paid subscribers', value: subscribers.toLocaleString(), icon: CreditCard, color: 'text-red-700', bg: 'bg-red-50' },
-    { label: 'Newsletter subs', value: newsletters.toLocaleString(), icon: Mail, color: 'text-amber-700', bg: 'bg-amber-50' },
-    { label: 'Paywall hits', value: paywallImpressions.toLocaleString(), icon: Users, color: 'text-slate-700', bg: 'bg-slate-50' },
+    { label: 'Total views', value: analytics.totalViews.toLocaleString(), icon: Eye, color: 'text-blue-700', bg: 'bg-blue-50' },
+    { label: 'Published articles', value: analytics.totalArticles.toLocaleString(), icon: TrendingUp, color: 'text-green-700', bg: 'bg-green-50' },
+    { label: 'Paid subscribers', value: analytics.subscribers.toLocaleString(), icon: CreditCard, color: 'text-red-700', bg: 'bg-red-50' },
+    { label: 'Newsletter subs', value: analytics.newsletters.toLocaleString(), icon: Mail, color: 'text-amber-700', bg: 'bg-amber-50' },
+    { label: 'Paywall hits', value: analytics.paywallImpressions.toLocaleString(), icon: Users, color: 'text-slate-700', bg: 'bg-slate-50' },
     { label: 'Conversion rate', value: `${conversionRate}%`, icon: ArrowUp, color: 'text-emerald-700', bg: 'bg-emerald-50' },
   ];
 
@@ -180,7 +75,7 @@ export default function AnalyticsDashboardPage() {
           <div className="h-40 bg-slate-100 rounded animate-pulse" />
         ) : (
           <div className="flex items-end gap-1 h-40">
-            {dailyStats.map(d => {
+            {analytics.dailyStats.map(d => {
               const heightPct = maxDailyViews > 0 ? (d.views / maxDailyViews) * 100 : 0;
               const label = new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
               return (
@@ -210,11 +105,11 @@ export default function AnalyticsDashboardPage() {
           </div>
           {loading ? (
             <div className="p-4 space-y-2 animate-pulse">{[...Array(5)].map((_, i) => <div key={i} className="h-8 bg-slate-100 rounded" />)}</div>
-          ) : topArticles.length === 0 ? (
+          ) : analytics.topArticles.length === 0 ? (
             <div className="p-8 text-center text-slate-400 text-sm">No published articles yet</div>
           ) : (
             <div className="divide-y divide-slate-50">
-              {topArticles.map((a, i) => (
+              {analytics.topArticles.map((a, i) => (
                 <div key={a.id} className="flex items-center gap-3 px-5 py-3">
                   <span className="text-slate-300 font-bold text-sm w-5 text-right flex-shrink-0">{i + 1}</span>
                   <div className="flex-1 min-w-0">
@@ -240,11 +135,11 @@ export default function AnalyticsDashboardPage() {
           </div>
           {loading ? (
             <div className="p-4 space-y-2 animate-pulse">{[...Array(5)].map((_, i) => <div key={i} className="h-8 bg-slate-100 rounded" />)}</div>
-          ) : topCategories.length === 0 ? (
+          ) : analytics.topCategories.length === 0 ? (
             <div className="p-8 text-center text-slate-400 text-sm">No category data yet</div>
           ) : (
             <div className="divide-y divide-slate-50">
-              {topCategories.map((cat, i) => (
+              {analytics.topCategories.map((cat, i) => (
                 <div key={cat.name} className="flex items-center gap-3 px-5 py-3">
                   <span className="text-slate-300 font-bold text-sm w-5 text-right flex-shrink-0">{i + 1}</span>
                   <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color || '#94a3b8' }} />
@@ -270,11 +165,11 @@ export default function AnalyticsDashboardPage() {
           </div>
           {loading ? (
             <div className="p-4 space-y-2 animate-pulse">{[...Array(5)].map((_, i) => <div key={i} className="h-8 bg-slate-100 rounded" />)}</div>
-          ) : topAuthors.length === 0 ? (
+          ) : analytics.topAuthors.length === 0 ? (
             <div className="p-8 text-center text-slate-400 text-sm">No author data yet</div>
           ) : (
             <div className="divide-y divide-slate-50">
-              {topAuthors.map((author, i) => (
+              {analytics.topAuthors.map((author, i) => (
                 <div key={author.slug} className="flex items-center gap-3 px-5 py-3">
                   <span className="text-slate-300 font-bold text-sm w-5 text-right flex-shrink-0">{i + 1}</span>
                   <div className="flex-1 min-w-0">
@@ -298,14 +193,14 @@ export default function AnalyticsDashboardPage() {
           </div>
           {loading ? (
             <div className="p-4 space-y-2 animate-pulse">{[...Array(5)].map((_, i) => <div key={i} className="h-8 bg-slate-100 rounded" />)}</div>
-          ) : searchTerms.length === 0 ? (
+          ) : analytics.searchTerms.length === 0 ? (
             <div className="p-8 text-center text-slate-400 text-sm">
               <Search size={24} className="mx-auto mb-2 text-slate-300" />
               No search data yet
             </div>
           ) : (
             <div className="divide-y divide-slate-50">
-              {searchTerms.map((term, i) => (
+              {analytics.searchTerms.map((term, i) => (
                 <div key={term.query} className="flex items-center gap-3 px-5 py-3">
                   <span className="text-slate-300 font-bold text-sm w-5 text-right flex-shrink-0">{i + 1}</span>
                   <div className="flex-1 min-w-0">

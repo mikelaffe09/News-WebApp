@@ -2,22 +2,12 @@ import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Plus, Search, Eye, Edit, Trash2 } from 'lucide-react';
 import CMSLayout from '../../components/layout/CMSLayout';
-import { supabase } from '../../lib/supabase';
 import { Article, Category, ArticleStatus } from '../../types';
-
-const ARTICLE_SELECT = `*, author:authors(name), category:categories(name,color)`;
-
-const STATUS_COLORS: Record<ArticleStatus, string> = {
-  draft: 'bg-slate-100 text-slate-600',
-  in_review: 'bg-amber-100 text-amber-700',
-  approved: 'bg-blue-100 text-blue-700',
-  scheduled: 'bg-purple-100 text-purple-700',
-  published: 'bg-green-100 text-green-700',
-  archived: 'bg-slate-200 text-slate-500',
-  retracted: 'bg-red-100 text-red-700',
-};
-
-const STATUSES: ArticleStatus[] = ['draft','in_review','approved','scheduled','published','archived'];
+import { getCategories } from '../../features/categories/categoryService';
+import { deleteArticle, getCmsArticles, updateArticle } from '../../features/articles/articleService';
+import { ARTICLE_TYPE_LABELS, CMS_STATUS_FILTERS, STATUS_COLORS } from '../../features/articles/articleConstants';
+import { ArticleMutation } from '../../features/articles/articleTypes';
+import { getErrorMessage } from '../../utils/errors';
 
 export default function ArticlesListPage() {
   const [searchParams] = useSearchParams();
@@ -28,31 +18,39 @@ export default function ArticlesListPage() {
   const [filterStatus, setFilterStatus] = useState<ArticleStatus | ''>(searchParams.get('status') as ArticleStatus || '');
   const [filterCategory, setFilterCategory] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    Promise.all([
-      supabase.from('categories').select('*').order('name'),
-    ]).then(([catRes]) => setCategories(catRes.data || []));
-    loadArticles();
+    getCategories({ orderBy: 'name' }).then(setCategories).catch(() => setCategories([]));
+    void loadArticles();
   }, []);
 
   async function loadArticles() {
     setLoading(true);
-    const { data } = await supabase.from('articles').select(ARTICLE_SELECT).order('updated_at', { ascending: false }).limit(100);
-    setArticles(data || []);
-    setLoading(false);
+    setError('');
+    try {
+      setArticles(await getCmsArticles());
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleDelete(id: string) {
-    await supabase.from('articles').delete().eq('id', id);
+    await deleteArticle(id);
     setArticles(prev => prev.filter(a => a.id !== id));
     setDeleteId(null);
   }
 
   async function handleTogglePublish(article: Article) {
     const newStatus = article.status === 'published' ? 'draft' : 'published';
-    const updates: Partial<Article> = { status: newStatus, published_at: newStatus === 'published' ? new Date().toISOString() : article.published_at };
-    await supabase.from('articles').update(updates).eq('id', article.id);
+    const updates: ArticleMutation = {
+      status: newStatus,
+      published_at: newStatus === 'published' ? new Date().toISOString() : article.published_at,
+      updated_at: new Date().toISOString(),
+    };
+    await updateArticle(article.id, updates);
     setArticles(prev => prev.map(a => a.id === article.id ? { ...a, ...updates } : a));
   }
 
@@ -81,7 +79,7 @@ export default function ArticlesListPage() {
           className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all ${filterStatus === '' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>
           All ({articles.length})
         </button>
-        {STATUSES.map(s => {
+        {CMS_STATUS_FILTERS.map(s => {
           const count = articles.filter(a => a.status === s).length;
           return (
             <button key={s} onClick={() => setFilterStatus(s)}
@@ -108,6 +106,10 @@ export default function ArticlesListPage() {
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-slate-400 animate-pulse">Loading articles…</div>
+        ) : error ? (
+          <div className="p-12 text-center">
+            <p className="text-slate-500">{error}</p>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center">
             <p className="text-slate-500 mb-3">No articles found</p>
@@ -132,13 +134,13 @@ export default function ArticlesListPage() {
                     <td className="px-4 py-3">
                       <div>
                         <p className="font-medium text-slate-900 line-clamp-1">{article.title}</p>
-                        <p className="text-xs text-slate-400 mt-0.5 capitalize">{article.article_type.replace('_', ' ')}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{ARTICLE_TYPE_LABELS[article.article_type]}</p>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600 hidden md:table-cell">{(article.author as any)?.name || '—'}</td>
+                    <td className="px-4 py-3 text-slate-600 hidden md:table-cell">{article.author?.name || '—'}</td>
                     <td className="px-4 py-3 hidden lg:table-cell">
-                      {(article.category as any)?.name ? (
-                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{(article.category as any).name}</span>
+                      {article.category?.name ? (
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{article.category.name}</span>
                       ) : '—'}
                     </td>
                     <td className="px-4 py-3">

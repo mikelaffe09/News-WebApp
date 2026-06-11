@@ -1,7 +1,14 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { Session, User } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabase';
+import type { Session, User } from '@supabase/supabase-js';
 import { CmsProfile } from '../types';
+import {
+  getCmsProfile,
+  getCurrentSession,
+  onAuthSessionChange,
+  signInWithPassword,
+  signOut as signOutUser,
+  signUpCmsUser,
+} from '../features/auth/authService';
 
 interface AuthContextValue {
   session: Session | null;
@@ -21,25 +28,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   async function loadProfile(userId: string) {
-    const { data } = await supabase
-      .from('cms_profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
+    const data = await getCmsProfile(userId);
     setProfile(data);
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    getCurrentSession().then(session => {
       setSession(session);
       if (session?.user) {
         loadProfile(session.user.id).finally(() => setLoading(false));
       } else {
         setLoading(false);
       }
+    }).catch(() => {
+      setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const subscription = onAuthSessionChange((_event, session) => {
       setSession(session);
       if (session?.user) {
         (async () => { await loadProfile(session.user.id); })();
@@ -52,27 +57,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function signIn(email: string, password: string) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return { error: error.message };
-    return { error: null };
+    return signInWithPassword(email, password);
   }
 
   async function signUp(email: string, password: string, displayName: string) {
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) return { error: error.message };
-    if (data.user) {
-      await supabase.from('cms_profiles').insert({
-        id: data.user.id,
-        email,
-        display_name: displayName,
-        role: 'writer',
-      });
-    }
-    return { error: null };
+    return signUpCmsUser(email, password, displayName);
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    await signOutUser();
   }
 
   return (

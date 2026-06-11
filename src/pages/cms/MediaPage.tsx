@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Plus, Copy, Check, Trash2, Image, Search, ExternalLink } from 'lucide-react';
 import CMSLayout from '../../components/layout/CMSLayout';
-import { supabase } from '../../lib/supabase';
 import { MediaAsset } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
+import { deleteMediaAsset, getMediaAssets, uploadMediaAsset } from '../../features/media/mediaService';
+import { getErrorMessage } from '../../utils/errors';
 
 const EMPTY_FORM = { url: '', filename: '', alt_text: '', caption: '', credit: '' };
 
@@ -24,24 +25,28 @@ export default function MediaPage() {
 
   async function load() {
     setLoading(true);
-    const { data } = await supabase.from('media_assets').select('*').order('created_at', { ascending: false });
-    setAssets(data || []);
-    setLoading(false);
+    try {
+      setAssets(await getMediaAssets());
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleAdd() {
     if (!form.url.trim()) { setError('URL is required'); return; }
     setSaving(true);
     setError('');
-    const { data, error: err } = await supabase.from('media_assets').insert({
-      url: form.url.trim(),
-      filename: form.filename.trim() || null,
-      alt_text: form.alt_text.trim() || null,
-      caption: form.caption.trim() || null,
-      credit: form.credit.trim() || null,
-      uploaded_by_email: user?.email || null,
-    }).select().single();
-    if (err) { setError(err.message); setSaving(false); return; }
+    let data: MediaAsset;
+    try {
+      data = await uploadMediaAsset({
+        url: form.url.trim(),
+        filename: form.filename.trim() || null,
+        alt_text: form.alt_text.trim() || null,
+        caption: form.caption.trim() || null,
+        credit: form.credit.trim() || null,
+        uploaded_by_email: user?.email || null,
+      });
+    } catch (err) { setError(getErrorMessage(err)); setSaving(false); return; }
     setAssets(prev => [data, ...prev]);
     setSaving(false);
     setAdding(false);
@@ -49,7 +54,7 @@ export default function MediaPage() {
   }
 
   async function handleDelete(id: string) {
-    await supabase.from('media_assets').delete().eq('id', id);
+    await deleteMediaAsset(id);
     setAssets(prev => prev.filter(a => a.id !== id));
     setDeleteId(null);
     if (selectedAsset?.id === id) setSelectedAsset(null);

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Plus, Edit2, Trash2, Tag } from 'lucide-react';
 import CMSLayout from '../../components/layout/CMSLayout';
-import { supabase } from '../../lib/supabase';
 import { Category } from '../../types';
+import { createCategory, deleteCategory, getCategories, updateCategory } from '../../features/categories/categoryService';
+import { slugify } from '../../utils/slug';
+import { getErrorMessage } from '../../utils/errors';
 
 const COLORS = [
   '#ef4444','#f97316','#eab308','#22c55e','#14b8a6',
@@ -27,9 +29,11 @@ export default function CategoriesPage() {
 
   async function load() {
     setLoading(true);
-    const { data } = await supabase.from('categories').select('*').order('sort_order').order('name');
-    setCategories(data || []);
-    setLoading(false);
+    try {
+      setCategories(await getCategories({ orderBy: 'sort_order_then_name' }));
+    } finally {
+      setLoading(false);
+    }
   }
 
   function openCreate() {
@@ -52,14 +56,10 @@ export default function CategoriesPage() {
     setError('');
   }
 
-  function deriveSlug(name: string) {
-    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  }
-
   function handleNameChange(name: string) {
     setForm(prev => ({
       ...prev, name,
-      slug: editing ? prev.slug : deriveSlug(name),
+      slug: editing ? prev.slug : slugify(name),
     }));
   }
 
@@ -70,19 +70,22 @@ export default function CategoriesPage() {
     setError('');
 
     if (editing) {
-      const { error: err } = await supabase.from('categories').update({
+      try {
+        await updateCategory(editing.id, {
         name: form.name.trim(), slug: form.slug.trim(),
         description: form.description || null, color: form.color,
-      }).eq('id', editing.id);
-      if (err) { setError(err.message); setSaving(false); return; }
+        });
+      } catch (err) { setError(getErrorMessage(err)); setSaving(false); return; }
       setCategories(prev => prev.map(c => c.id === editing.id ? { ...c, ...form, name: form.name.trim(), slug: form.slug.trim() } : c));
     } else {
       const maxOrder = categories.length > 0 ? Math.max(...categories.map(c => c.sort_order)) + 1 : 0;
-      const { data, error: err } = await supabase.from('categories').insert({
+      let data: Category;
+      try {
+        data = await createCategory({
         name: form.name.trim(), slug: form.slug.trim(),
         description: form.description || null, color: form.color, sort_order: maxOrder,
-      }).select().single();
-      if (err) { setError(err.message); setSaving(false); return; }
+        });
+      } catch (err) { setError(getErrorMessage(err)); setSaving(false); return; }
       setCategories(prev => [...prev, data]);
     }
 
@@ -91,7 +94,7 @@ export default function CategoriesPage() {
   }
 
   async function handleDelete(id: string) {
-    await supabase.from('categories').delete().eq('id', id);
+    await deleteCategory(id);
     setCategories(prev => prev.filter(c => c.id !== id));
     setDeleteId(null);
   }

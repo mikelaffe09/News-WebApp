@@ -1,70 +1,13 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { TrendingUp, Zap, Flame, Clock } from 'lucide-react';
 import PublicLayout from '../../components/layout/PublicLayout';
-import ArticleCard from '../../components/ArticleCard';
+import ArticleCard from '../../features/articles/ArticleCard';
 import NewsletterSignup from '../../components/NewsletterSignup';
-import { supabase } from '../../lib/supabase';
-import { Article, Category } from '../../types';
-
-const ARTICLE_SELECT = `*, author:authors(*), category:categories(*)`;
-
-function timeAgo(iso: string) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const h = Math.floor(diff / 3600000);
-  const m = Math.floor(diff / 60000);
-  if (m < 60) return `${m}m ago`;
-  if (h < 24) return `${h}h ago`;
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
+import { useHomepageData } from '../../features/homepage/useHomepageData';
+import { timeAgo } from '../../utils/date';
 
 export default function HomePage() {
-  const [breaking, setBreaking] = useState<Article[]>([]);
-  const [hero, setHero] = useState<Article | null>(null);
-  const [featured, setFeatured] = useState<Article[]>([]);
-  const [latest, setLatest] = useState<Article[]>([]);
-  const [trending, setTrending] = useState<Article[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [categoryArticles, setCategoryArticles] = useState<Record<string, Article[]>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      const [publishedRes, catRes, trendingRes] = await Promise.all([
-        supabase.from('articles').select(ARTICLE_SELECT).eq('status', 'published').order('published_at', { ascending: false }).limit(20),
-        supabase.from('categories').select('*').order('sort_order').limit(6),
-        supabase.from('articles').select(ARTICLE_SELECT)
-          .eq('status', 'published')
-          .gte('published_at', new Date(Date.now() - 7 * 86400000).toISOString())
-          .order('view_count', { ascending: false })
-          .limit(8),
-      ]);
-
-      const articles: Article[] = publishedRes.data || [];
-      const cats: Category[] = catRes.data || [];
-      const trendingData: Article[] = trendingRes.data || [];
-
-      const breakingArticles = articles.filter(a => a.is_breaking);
-      setBreaking(breakingArticles);
-      const nonBreaking = articles.filter(a => !a.is_breaking);
-      setHero(nonBreaking[0] || articles[0] || null);
-      setFeatured(articles.slice(1, 5));
-      setLatest(articles.slice(0, 10));
-      setTrending(trendingData);
-      setCategories(cats);
-
-      const catMap: Record<string, Article[]> = {};
-      await Promise.all(cats.slice(0, 4).map(async cat => {
-        const { data } = await supabase.from('articles').select(ARTICLE_SELECT)
-          .eq('status', 'published').eq('category_id', cat.id)
-          .order('published_at', { ascending: false }).limit(4);
-        catMap[cat.slug] = data || [];
-      }));
-      setCategoryArticles(catMap);
-      setLoading(false);
-    }
-    load();
-  }, []);
+  const { breaking, hero, featured, latest, trending, categories, categoryArticles, loading, error } = useHomepageData();
 
   return (
     <PublicLayout>
@@ -90,6 +33,10 @@ export default function HomePage() {
               <div className="lg:col-span-2 bg-slate-200 rounded-lg aspect-video" />
               <div className="space-y-4">{[1,2,3,4].map(i => <div key={i} className="h-16 bg-slate-200 rounded" />)}</div>
             </div>
+          </div>
+        ) : error ? (
+          <div className="text-center py-20">
+            <p className="text-slate-500">Unable to load the latest stories.</p>
           </div>
         ) : (
           <>

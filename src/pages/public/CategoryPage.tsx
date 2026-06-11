@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import PublicLayout from '../../components/layout/PublicLayout';
-import ArticleCard from '../../components/ArticleCard';
+import ArticleCard from '../../features/articles/ArticleCard';
 import NewsletterSignup from '../../components/NewsletterSignup';
-import { supabase } from '../../lib/supabase';
 import { Article, Category } from '../../types';
+import { getPublishedArticlesByCategory } from '../../features/articles/articleService';
+import { getCategoryBySlug } from '../../features/categories/categoryService';
+import { getErrorMessage } from '../../utils/errors';
 
-const ARTICLE_SELECT = `*, author:authors(*), category:categories(*)`;
 const PAGE_SIZE = 12;
 
 export default function CategoryPage() {
@@ -17,35 +18,51 @@ export default function CategoryPage() {
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!slug) return;
-    setLoading(true); setNotFound(false); setPage(0); setArticles([]);
+    let active = true;
+    setLoading(true); setNotFound(false); setPage(0); setArticles([]); setError('');
 
-    supabase.from('categories').select('*').eq('slug', slug).maybeSingle().then(({ data }) => {
-      if (!data) { setNotFound(true); setLoading(false); return; }
-      setCategory(data);
-      loadArticles(data.id, 0);
-    });
+    getCategoryBySlug(slug)
+      .then(data => {
+        if (!active) return;
+        if (!data) { setNotFound(true); setLoading(false); return; }
+        setCategory(data);
+        void loadArticles(data.id, 0);
+      })
+      .catch(err => {
+        if (active) {
+          setError(getErrorMessage(err));
+          setLoading(false);
+        }
+      });
+
+    return () => { active = false; };
   }, [slug]);
 
   async function loadArticles(categoryId: string, pageNum: number) {
     setLoading(true);
-    const from = pageNum * PAGE_SIZE;
-    const { data, count } = await supabase.from('articles').select(ARTICLE_SELECT, { count: 'exact' })
-      .eq('status', 'published').eq('category_id', categoryId)
-      .order('published_at', { ascending: false }).range(from, from + PAGE_SIZE - 1);
-    if (pageNum === 0) setArticles(data || []);
-    else setArticles(prev => [...prev, ...(data || [])]);
-    setTotal(count || 0);
-    setLoading(false);
+    setError('');
+    try {
+      const result = await getPublishedArticlesByCategory(categoryId, pageNum, PAGE_SIZE);
+      if (pageNum === 0) setArticles(result.articles);
+      else setArticles(prev => [...prev, ...result.articles]);
+      setTotal(result.total);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   }
 
-  if (notFound) {
+  if (notFound || error) {
     return (
       <PublicLayout>
         <div className="max-w-2xl mx-auto px-4 py-20 text-center">
-          <h1 className="font-serif text-3xl font-bold text-slate-900 mb-3">Category not found</h1>
+          <h1 className="font-serif text-3xl font-bold text-slate-900 mb-3">{error ? 'Unable to load category' : 'Category not found'}</h1>
+          {error && <p className="text-sm text-slate-500 mb-4">{error}</p>}
           <Link to="/" className="text-red-700 hover:underline text-sm font-medium">Return to homepage</Link>
         </div>
       </PublicLayout>

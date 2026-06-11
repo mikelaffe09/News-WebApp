@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Mail, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
-import { supabase } from '../lib/supabase';
 import { Category } from '../types';
+import { getCategories } from '../features/categories/categoryService';
+import { subscribeToNewsletter } from '../features/newsletters/newsletterService';
 
 interface Props {
   variant?: 'inline' | 'banner';
@@ -25,9 +26,7 @@ export default function NewsletterSignup({
 
   useEffect(() => {
     if (variant === 'banner') {
-      supabase.from('categories').select('*').order('sort_order').limit(8).then(({ data }) => {
-        if (data) setCategories(data);
-      });
+      getCategories({ orderBy: 'sort_order', limit: 8 }).then(setCategories).catch(() => setCategories([]));
     }
   }, [variant]);
 
@@ -47,13 +46,13 @@ export default function NewsletterSignup({
       categories: selectedCats.size > 0 ? [...selectedCats] : undefined,
       frequency,
     };
-    const { error } = await supabase.from('newsletter_subscriptions').insert({
+    const result = await subscribeToNewsletter({
       email: email.trim(),
       name: name.trim() || null,
       preferences,
     });
-    if (error) {
-      setErrorMsg(error.code === '23505' ? 'You\'re already subscribed!' : 'Something went wrong. Please try again.');
+    if (!result.ok) {
+      setErrorMsg(result.message ?? 'Something went wrong. Please try again.');
       setStatus('error');
     } else {
       setStatus('success');

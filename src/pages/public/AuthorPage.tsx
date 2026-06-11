@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Mail, FileText, TrendingUp } from 'lucide-react';
 import PublicLayout from '../../components/layout/PublicLayout';
-import ArticleCard from '../../components/ArticleCard';
+import ArticleCard from '../../features/articles/ArticleCard';
 import NewsletterSignup from '../../components/NewsletterSignup';
-import { supabase } from '../../lib/supabase';
 import { Author, Article } from '../../types';
+import { getPublishedArticlesByAuthor } from '../../features/articles/articleService';
+import { getAuthorBySlug } from '../../features/authors/authorService';
+import { getErrorMessage } from '../../utils/errors';
 
-const ARTICLE_SELECT = `*, author:authors(*), category:categories(*)`;
+const PAGE_SIZE = 12;
 
 export default function AuthorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -18,46 +20,60 @@ export default function AuthorPage() {
   const [notFound, setNotFound] = useState(false);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
-  const PAGE_SIZE = 12;
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!slug) return;
+    let active = true;
     setLoading(true);
     setNotFound(false);
+    setError('');
+    setArticles([]);
+    setPage(0);
 
-    supabase.from('authors').select('*').eq('slug', slug).maybeSingle().then(({ data }) => {
-      if (!data) { setNotFound(true); setLoading(false); return; }
-      setAuthor(data);
-      loadArticles(data.id, 0);
-    });
+    getAuthorBySlug(slug)
+      .then(data => {
+        if (!active) return;
+        if (!data) { setNotFound(true); setLoading(false); return; }
+        setAuthor(data);
+        void loadArticles(data.id, 0);
+      })
+      .catch(err => {
+        if (active) {
+          setError(getErrorMessage(err));
+          setLoading(false);
+        }
+      });
+
+    return () => { active = false; };
   }, [slug]);
 
   async function loadArticles(authorId: string, pageNum: number) {
     setLoading(true);
-    const from = pageNum * PAGE_SIZE;
-    const { data, count } = await supabase.from('articles')
-      .select(ARTICLE_SELECT, { count: 'exact' })
-      .eq('status', 'published')
-      .eq('author_id', authorId)
-      .order('published_at', { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
+    setError('');
+    try {
+      const result = await getPublishedArticlesByAuthor(authorId, pageNum, PAGE_SIZE);
 
-    const items = data || [];
-    if (pageNum === 0) {
-      setArticles(items);
-      setTotalViews(items.reduce((s, a) => s + a.view_count, 0));
-    } else {
-      setArticles(prev => [...prev, ...items]);
+      if (pageNum === 0) {
+        setArticles(result.articles);
+        setTotalViews(result.articles.reduce((sum, article) => sum + article.view_count, 0));
+      } else {
+        setArticles(prev => [...prev, ...result.articles]);
+      }
+      setTotal(result.total);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
     }
-    setTotal(count || 0);
-    setLoading(false);
   }
 
-  if (notFound || (!loading && !author)) {
+  if (notFound || error || (!loading && !author)) {
     return (
       <PublicLayout>
         <div className="max-w-2xl mx-auto px-4 py-20 text-center">
-          <h1 className="font-serif text-3xl font-bold text-slate-900 mb-3">Author not found</h1>
+          <h1 className="font-serif text-3xl font-bold text-slate-900 mb-3">{error ? 'Unable to load author' : 'Author not found'}</h1>
+          {error && <p className="text-sm text-slate-500 mb-4">{error}</p>}
           <Link to="/" className="text-red-700 hover:underline text-sm font-medium">Return to homepage</Link>
         </div>
       </PublicLayout>

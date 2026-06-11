@@ -1,19 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Clock, Lock, Share2, Bookmark, ArrowLeft, Eye, Tag } from 'lucide-react';
+import { Clock, Lock, Share2, Bookmark, ArrowLeft, Eye, Tag as TagIcon } from 'lucide-react';
 import PublicLayout from '../../components/layout/PublicLayout';
-import ArticleCard from '../../components/ArticleCard';
+import ArticleCard from '../../features/articles/ArticleCard';
 import NewsletterSignup from '../../components/NewsletterSignup';
 import PaywallGate from '../../components/PaywallGate';
-import { supabase } from '../../lib/supabase';
 import { usePublicAuth } from '../../contexts/PublicAuthContext';
-import { Article } from '../../types';
-
-const ARTICLE_SELECT = `*, author:authors(*), category:categories(*), article_tags(tag_id, tags:tags(id, name, slug))`;
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-}
+import { Article, Tag } from '../../types';
+import { getArticleBySlug, getRelatedArticles, recordArticleView } from '../../features/articles/articleService';
+import { formatLongDate } from '../../utils/date';
+import { getErrorMessage } from '../../utils/errors';
 
 function renderBody(body: string) {
   return body.split(/\n\n+/).filter(p => p.trim()).map((para, i) => (
@@ -27,6 +23,7 @@ export default function ArticlePage() {
   const [related, setRelated] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [error, setError] = useState('');
   const { session, savedIds, saveArticle, unsaveArticle } = usePublicAuth();
   const navigate = useNavigate();
 
@@ -34,68 +31,32 @@ export default function ArticlePage() {
 
   useEffect(() => {
     if (!slug) return;
-    setLoading(true); setNotFound(false);
+    let active = true;
+    setLoading(true); setNotFound(false); setError('');
 
     async function load() {
-      const { data } = await supabase.from('articles').select(ARTICLE_SELECT)
-        .eq('slug', slug).eq('status', 'published').maybeSingle();
+      try {
+        const data = await getArticleBySlug(slug);
 
-      if (!data) { setNotFound(true); setLoading(false); return; }
-      setArticle(data);
+        if (!active) return;
+        if (!data) { setNotFound(true); setLoading(false); return; }
 
-      const sid = sessionStorage.getItem('sid') || Math.random().toString(36).slice(2);
-      sessionStorage.setItem('sid', sid);
-      supabase.from('analytics_events').insert({
-        event_type: 'article_view', article_id: data.id,
-        category_id: data.category_id, author_id: data.author_id,
-        session_id: sid,
-      });
-      supabase.from('articles').update({ view_count: data.view_count + 1 }).eq('id', data.id);
+        setArticle(data);
 
-      // Related: shared tags first, then same category to fill up to 4
-      const tagIds = (data.article_tags || [])
-        .map((t: { tag_id: string }) => t.tag_id)
-        .filter(Boolean);
-      let relatedArticles: Article[] = [];
+        const sid = sessionStorage.getItem('sid') || Math.random().toString(36).slice(2);
+        sessionStorage.setItem('sid', sid);
+        void recordArticleView(data, sid);
 
-      if (tagIds.length > 0) {
-        const { data: tagRows } = await supabase
-          .from('article_tags')
-          .select('article_id')
-          .in('tag_id', tagIds)
-          .neq('article_id', data.id)
-          .limit(20);
-        const tagArticleIds = [...new Set((tagRows || []).map((r: { article_id: string }) => r.article_id))];
-        if (tagArticleIds.length > 0) {
-          const { data: tagRelated } = await supabase
-            .from('articles')
-            .select(`*, author:authors(*), category:categories(*)`)
-            .eq('status', 'published')
-            .in('id', tagArticleIds)
-            .order('published_at', { ascending: false })
-            .limit(4);
-          relatedArticles = tagRelated || [];
-        }
+        const relatedArticles = await getRelatedArticles(data);
+        if (active) setRelated(relatedArticles);
+      } catch (err) {
+        if (active) setError(getErrorMessage(err));
+      } finally {
+        if (active) setLoading(false);
       }
-
-      if (relatedArticles.length < 4 && data.category_id) {
-        const existing = new Set(relatedArticles.map((a: Article) => a.id));
-        const { data: catRelated } = await supabase
-          .from('articles')
-          .select(`*, author:authors(*), category:categories(*)`)
-          .eq('status', 'published')
-          .eq('category_id', data.category_id)
-          .neq('id', data.id)
-          .order('published_at', { ascending: false })
-          .limit(8);
-        const extras = (catRelated || []).filter((a: Article) => !existing.has(a.id));
-        relatedArticles = [...relatedArticles, ...extras].slice(0, 4);
-      }
-
-      setRelated(relatedArticles);
-      setLoading(false);
     }
     load();
+    return () => { active = false; };
   }, [slug]);
 
   async function handleBookmark() {
@@ -128,7 +89,8 @@ export default function ArticlePage() {
     return (
       <PublicLayout>
         <div className="max-w-2xl mx-auto px-4 py-20 text-center">
-          <h1 className="font-serif text-3xl font-bold text-slate-900 mb-3">Article not found</h1>
+          <h1 className="font-serif text-3xl font-bold text-slate-900 mb-3">{error ? 'Unable to load article' : 'Article not found'}</h1>
+          {error && <p className="text-sm text-slate-500 mb-4">{error}</p>}
           <Link to="/" className="bg-red-700 text-white px-5 py-2.5 rounded hover:bg-red-800 transition-colors text-sm font-semibold">Return to homepage</Link>
         </div>
       </PublicLayout>
@@ -138,8 +100,8 @@ export default function ArticlePage() {
   const showPaywall = article.is_premium;
   const bodyPreview = article.body.slice(0, 800);
   const articleTags = (article.article_tags || [])
-    .map((t: { tag_id: string; tags: { id: string; name: string; slug: string } }) => t.tags)
-    .filter(Boolean);
+    .map(articleTag => articleTag.tags)
+    .filter((tag): tag is Tag => Boolean(tag));
 
   return (
     <PublicLayout>
@@ -179,7 +141,7 @@ export default function ArticlePage() {
                     </Link>
                   )}
                   <div className="flex items-center gap-3 text-xs text-slate-500">
-                    <span className="flex items-center gap-1"><Clock size={11} />{article.published_at ? formatDate(article.published_at) : 'Unpublished'}</span>
+                    <span className="flex items-center gap-1"><Clock size={11} />{article.published_at ? formatLongDate(article.published_at) : 'Unpublished'}</span>
                     <span className="flex items-center gap-1"><Eye size={11} />{article.view_count.toLocaleString()} views</span>
                   </div>
                 </div>
@@ -216,8 +178,8 @@ export default function ArticlePage() {
 
             {articleTags.length > 0 && (
               <div className="mt-8 pt-4 border-t border-slate-200 flex items-center gap-2 flex-wrap">
-                <Tag size={14} className="text-slate-400 flex-shrink-0" />
-                {articleTags.map((tag: { id: string; name: string; slug: string }) => (
+                <TagIcon size={14} className="text-slate-400 flex-shrink-0" />
+                {articleTags.map(tag => (
                   <Link
                     key={tag.id}
                     to={`/search?q=${encodeURIComponent(tag.name)}`}

@@ -4,8 +4,17 @@ import {
   Link as LinkIcon, Tag, Layout, Save,
 } from 'lucide-react';
 import CMSLayout from '../../components/layout/CMSLayout';
-import { supabase } from '../../lib/supabase';
-import { HomepageModule, Article, Category } from '../../types';
+import { Category } from '../../types';
+import {
+  findHomepageArticleOption,
+  findHomepageCategoryOption,
+  getHomepageCurationData,
+  updateHomepageModuleActive,
+  updateHomepageModuleField as persistHomepageModuleField,
+  updateHomepageModulePositions,
+  updateHomepageModuleTitle,
+} from '../../features/homepage/homepageService';
+import { HomepageArticleOption, HomepageModuleWithSelections } from '../../features/homepage/homepageTypes';
 
 const MODULE_LABELS: Record<string, string> = {
   hero: 'Hero',
@@ -27,38 +36,32 @@ const MODULE_ICONS: Record<string, string> = {
   trending: '📈',
 };
 
-const MODULE_SELECT = `*, article:articles(id,title,slug), category:categories(id,name,slug)`;
-
 export default function HomepageCurationPage() {
-  const [modules, setModules] = useState<HomepageModule[]>([]);
+  const [modules, setModules] = useState<HomepageModuleWithSelections[]>([]);
   const [loading, setLoading] = useState(true);
-  const [articles, setArticles] = useState<Article[]>([]);
+  const [articles, setArticles] = useState<HomepageArticleOption[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      supabase.from('homepage_modules').select(MODULE_SELECT).order('position'),
-      supabase.from('articles').select('id,title,slug').eq('status', 'published').order('published_at', { ascending: false }).limit(50),
-      supabase.from('categories').select('*').order('name'),
-    ]).then(([modRes, artRes, catRes]) => {
-      setModules(modRes.data || []);
-      setArticles(artRes.data as Article[] || []);
-      setCategories(catRes.data || []);
+    getHomepageCurationData().then(data => {
+      setModules(data.modules);
+      setArticles(data.articles);
+      setCategories(data.categories);
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
   }, []);
 
-  async function toggleActive(mod: HomepageModule) {
+  async function toggleActive(mod: HomepageModuleWithSelections) {
     setSaving(mod.id);
     const newActive = !mod.is_active;
-    await supabase.from('homepage_modules').update({ is_active: newActive }).eq('id', mod.id);
+    await updateHomepageModuleActive(mod.id, newActive);
     setModules(prev => prev.map(m => m.id === mod.id ? { ...m, is_active: newActive } : m));
     setSaving(null);
   }
 
-  async function moveModule(mod: HomepageModule, direction: 'up' | 'down') {
+  async function moveModule(mod: HomepageModuleWithSelections, direction: 'up' | 'down') {
     const sorted = [...modules].sort((a, b) => a.position - b.position);
     const idx = sorted.findIndex(m => m.id === mod.id);
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
@@ -70,24 +73,24 @@ export default function HomepageCurationPage() {
       { id: swap.id, position: mod.position },
     ];
 
-    await Promise.all(updates.map(u => supabase.from('homepage_modules').update({ position: u.position }).eq('id', u.id)));
+    await updateHomepageModulePositions(updates);
     setModules(prev => prev.map(m => {
       const u = updates.find(x => x.id === m.id);
       return u ? { ...m, position: u.position } : m;
     }));
   }
 
-  async function updateModuleField(id: string, field: string, value: string | null) {
-    const update: Record<string, unknown> = { [field]: value || null };
-    if (field === 'article_id') update.article = articles.find(a => a.id === value) || null;
-    if (field === 'category_id') update.category = categories.find(c => c.id === value) || null;
-    await supabase.from('homepage_modules').update({ [field]: value || null }).eq('id', id);
+  async function updateModuleField(id: string, field: 'article_id' | 'category_id', value: string | null) {
+    const update = field === 'article_id'
+      ? { article_id: value || null, article: findHomepageArticleOption(articles, value) }
+      : { category_id: value || null, category: findHomepageCategoryOption(categories, value) };
+    await persistHomepageModuleField(id, field, value);
     setModules(prev => prev.map(m => m.id === id ? { ...m, ...update } : m));
     setSaving(null);
   }
 
   async function updateTitle(id: string, title: string) {
-    await supabase.from('homepage_modules').update({ title: title || null }).eq('id', id);
+    await updateHomepageModuleTitle(id, title);
     setModules(prev => prev.map(m => m.id === id ? { ...m, title: title || null } : m));
   }
 
@@ -142,9 +145,9 @@ export default function HomepageCurationPage() {
                       <p className="font-semibold text-slate-900 text-sm">{MODULE_LABELS[mod.module_type] || mod.module_type}</p>
                       <p className="text-xs text-slate-400">
                         {mod.module_type === 'hero' || mod.module_type === 'opinion' ? (
-                          (mod.article as any)?.title ? `Article: ${(mod.article as any).title}` : 'No article selected'
+                          mod.article?.title ? `Article: ${mod.article.title}` : 'No article selected'
                         ) : mod.module_type === 'category_spotlight' ? (
-                          (mod.category as any)?.name ? `Category: ${(mod.category as any).name}` : 'No category selected'
+                          mod.category?.name ? `Category: ${mod.category.name}` : 'No category selected'
                         ) : mod.title || 'No custom title'}
                       </p>
                     </div>

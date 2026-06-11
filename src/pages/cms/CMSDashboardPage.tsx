@@ -1,42 +1,27 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Users, Mail, Clock, ArrowRight, Eye, Plus, BarChart2 } from 'lucide-react';
+import { FileText, Users, ArrowRight, Eye, Plus, BarChart2 } from 'lucide-react';
 import CMSLayout from '../../components/layout/CMSLayout';
-import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { Article } from '../../types';
-
-const ARTICLE_SELECT = `id, title, slug, status, article_type, view_count, published_at, updated_at, author:authors(name), category:categories(name,color)`;
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-slate-100 text-slate-600',
-  in_review: 'bg-amber-100 text-amber-700',
-  approved: 'bg-blue-100 text-blue-700',
-  published: 'bg-green-100 text-green-700',
-  scheduled: 'bg-purple-100 text-purple-700',
-  archived: 'bg-slate-200 text-slate-500',
-};
+import { getCmsDashboardData, CmsDashboardStats } from '../../features/cms/dashboardService';
+import { STATUS_COLORS } from '../../features/articles/articleConstants';
 
 export default function CMSDashboardPage() {
   const { profile, user } = useAuth();
-  const [stats, setStats] = useState({ published: 0, drafts: 0, inReview: 0, subscribers: 0, newsletters: 0, scheduled: 0 });
+  const [stats, setStats] = useState<CmsDashboardStats>({ published: 0, drafts: 0, inReview: 0, subscribers: 0, newsletters: 0, scheduled: 0 });
   const [recentArticles, setRecentArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
-      const [pubRes, draftRes, reviewRes, scheduledRes, subRes, nlRes, articlesRes] = await Promise.all([
-        supabase.from('articles').select('id', { count: 'exact' }).eq('status', 'published'),
-        supabase.from('articles').select('id', { count: 'exact' }).eq('status', 'draft'),
-        supabase.from('articles').select('id', { count: 'exact' }).eq('status', 'in_review'),
-        supabase.from('articles').select('id', { count: 'exact' }).eq('status', 'scheduled'),
-        supabase.from('subscriptions').select('id', { count: 'exact' }).eq('status', 'active'),
-        supabase.from('newsletter_subscriptions').select('id', { count: 'exact' }).eq('status', 'active'),
-        supabase.from('articles').select(ARTICLE_SELECT).order('updated_at', { ascending: false }).limit(8),
-      ]);
-      setStats({ published: pubRes.count || 0, drafts: draftRes.count || 0, inReview: reviewRes.count || 0, scheduled: scheduledRes.count || 0, subscribers: subRes.count || 0, newsletters: nlRes.count || 0 });
-      setRecentArticles(articlesRes.data || []);
-      setLoading(false);
+      try {
+        const data = await getCmsDashboardData();
+        setStats(data.stats);
+        setRecentArticles(data.recentArticles);
+      } finally {
+        setLoading(false);
+      }
     }
     load();
   }, []);
@@ -97,8 +82,8 @@ export default function CMSDashboardPage() {
                 <div className="flex-1 min-w-0">
                   <Link to={`/cms/articles/${article.id}/edit`} className="text-sm font-medium text-slate-800 hover:text-red-700 transition-colors line-clamp-1">{article.title}</Link>
                   <div className="flex items-center gap-2 mt-0.5">
-                    {(article.category as any)?.name && <span className="text-xs text-slate-400">{(article.category as any).name}</span>}
-                    {(article.author as any)?.name && <span className="text-xs text-slate-400">· {(article.author as any).name}</span>}
+                    {article.category?.name && <span className="text-xs text-slate-400">{article.category.name}</span>}
+                    {article.author?.name && <span className="text-xs text-slate-400">· {article.author.name}</span>}
                   </div>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">

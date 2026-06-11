@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Plus, Edit2, Trash2, User, ExternalLink } from 'lucide-react';
 import CMSLayout from '../../components/layout/CMSLayout';
-import { supabase } from '../../lib/supabase';
 import { Author } from '../../types';
+import { createAuthor, deleteAuthor, getAuthors, updateAuthor } from '../../features/authors/authorService';
+import { slugify } from '../../utils/slug';
+import { getErrorMessage } from '../../utils/errors';
 
 const EMPTY = { name: '', slug: '', bio: '', email: '', avatar_url: '' };
 
@@ -20,9 +22,11 @@ export default function AuthorsPage() {
 
   async function load() {
     setLoading(true);
-    const { data } = await supabase.from('authors').select('*').order('name');
-    setAuthors(data || []);
-    setLoading(false);
+    try {
+      setAuthors(await getAuthors());
+    } finally {
+      setLoading(false);
+    }
   }
 
   function openCreate() {
@@ -48,14 +52,10 @@ export default function AuthorsPage() {
     setError('');
   }
 
-  function deriveSlug(name: string) {
-    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  }
-
   function handleNameChange(name: string) {
     setForm(prev => ({
       ...prev, name,
-      slug: editing ? prev.slug : deriveSlug(name),
+      slug: editing ? prev.slug : slugify(name),
     }));
   }
 
@@ -72,12 +72,15 @@ export default function AuthorsPage() {
     };
 
     if (editing) {
-      const { error: err } = await supabase.from('authors').update(payload).eq('id', editing.id);
-      if (err) { setError(err.message); setSaving(false); return; }
+      try {
+        await updateAuthor(editing.id, payload);
+      } catch (err) { setError(getErrorMessage(err)); setSaving(false); return; }
       setAuthors(prev => prev.map(a => a.id === editing.id ? { ...a, ...payload } : a));
     } else {
-      const { data, error: err } = await supabase.from('authors').insert(payload).select().single();
-      if (err) { setError(err.message); setSaving(false); return; }
+      let data: Author;
+      try {
+        data = await createAuthor(payload);
+      } catch (err) { setError(getErrorMessage(err)); setSaving(false); return; }
       setAuthors(prev => [...prev, data]);
     }
 
@@ -86,7 +89,7 @@ export default function AuthorsPage() {
   }
 
   async function handleDelete(id: string) {
-    await supabase.from('authors').delete().eq('id', id);
+    await deleteAuthor(id);
     setAuthors(prev => prev.filter(a => a.id !== id));
     setDeleteId(null);
   }

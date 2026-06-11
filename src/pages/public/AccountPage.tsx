@@ -3,19 +3,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Bookmark, User, LogOut, Settings, ChevronRight, Clock, Lock, Trash2 } from 'lucide-react';
 import PublicLayout from '../../components/layout/PublicLayout';
 import { usePublicAuth } from '../../contexts/PublicAuthContext';
-import { supabase } from '../../lib/supabase';
 import { Article } from '../../types';
-
-const ARTICLE_SELECT = `*, author:authors(*), category:categories(*)`;
-
-function timeAgo(iso: string) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const h = Math.floor(diff / 3600000);
-  const m = Math.floor(diff / 60000);
-  if (m < 60) return `${m}m ago`;
-  if (h < 24) return `${h}h ago`;
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
+import { getPublishedArticlesByIds } from '../../features/articles/articleService';
+import { timeAgo } from '../../utils/date';
 
 export default function AccountPage() {
   const { session, user, profile, savedIds, unsaveArticle, updateProfile, signOut } = usePublicAuth();
@@ -39,13 +29,9 @@ export default function AccountPage() {
     if (!session || savedIds.size === 0) { setLoadingSaved(false); setSavedArticles([]); return; }
     setLoadingSaved(true);
     const ids = [...savedIds];
-    supabase.from('articles').select(ARTICLE_SELECT)
-      .in('id', ids).eq('status', 'published')
-      .then(({ data }) => {
-        const ordered = ids.map(id => data?.find(a => a.id === id)).filter(Boolean) as Article[];
-        setSavedArticles(ordered);
-        setLoadingSaved(false);
-      });
+    getPublishedArticlesByIds(ids)
+      .then(setSavedArticles)
+      .finally(() => setLoadingSaved(false));
   }, [session, savedIds]);
 
   async function handleRemove(articleId: string) {
